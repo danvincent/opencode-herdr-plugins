@@ -1,0 +1,7 @@
+.DS_Store
+node_modules/
+# Task notes written by agents (see README: Task notes)
+.agents/
+# Files Herdr writes into installed mod folders
+jsconfig.json
+*.d.ts
