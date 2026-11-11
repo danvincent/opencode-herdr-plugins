@@ -1,0 +1,9 @@
+\e[2m• Ran\e[0m python -m pipeline.backfill --since 2026-01-01 --dry-run
+  \e[2m└ 1,284,903 rows in 41 partitions, no conflicts\e[0m
+
+\e[2m• Edited\e[0m pipeline/backfill.py (+52 -18)
+
+• Backfill now runs per partition with a checkpoint, so a failure resumes where it stopped.
+  PR #79 has two approvals and green checks.
+
+\e[2m›\e[0m

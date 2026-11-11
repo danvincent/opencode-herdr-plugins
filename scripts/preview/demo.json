@@ -1,0 +1,93 @@
+{
+  "window": { "width": 1600, "height": 1000 },
+  "spaces": [
+    { "name": "checkout-api", "branch": "eng-412-retry-webhooks",
+      "dirty": { "src/webhooks/deliver.ts": 48, "src/webhooks/backoff.ts": 37, "test/webhooks/retry.test.ts": 66 },
+      "tabs": [
+        { "name": "retry webhooks", "panes": [{ "app": "claude-code", "status": "working", "screen": "retry-webhooks.txt", "title": "Retry webhook deliveries", "focus": true }] },
+        { "name": "rate limits", "branch": "eng-431-rate-limit", "panes": [{ "app": "claude-code", "status": "blocked", "screen": "rate-limits.txt", "title": "Rate-limit the public API" }] }
+      ] },
+    { "name": "web-app", "branch": "eng-405-notification-settings",
+      "tabs": [
+        { "name": "settings page", "panes": [{ "app": "claude-code", "status": "done", "screen": "settings-page.txt", "title": "Notification settings tab" }] },
+        { "name": "dev server", "panes": [{ "argv": ["/bin/zsh"] }] }
+      ] },
+    { "name": "data-pipeline", "branch": "eng-377-resumable-backfill",
+      "tabs": [{ "name": "backfill", "panes": [{ "app": "codex", "status": "idle", "screen": "backfill.txt", "title": "Resumable backfill" }] }] },
+    { "name": "docs", "branch": "main",
+      "tabs": [{ "name": "1", "panes": [{ "argv": ["/bin/zsh"] }] }] }
+  ],
+  "summaries": {
+    "checkout-api": {
+      "ENG-412": {
+        "title": "Retry webhook deliveries with backoff",
+        "goal": "Failed webhook deliveries are retried with backoff instead of being dropped, without ever sending one twice.",
+        "planFile": ".agents/tasks/ENG-412-plan.md",
+        "steps": [
+          { "state": "done", "text": "Find where deliveries fail and get dropped" },
+          { "state": "done", "text": "Retry with backoff: 1s, 4s, 16s, 64s, then mark the endpoint failing" },
+          { "state": "done", "text": "Tests for retries, give-up and duplicate deliveries" },
+          { "state": "now", "text": "PR #88, waiting on checks" }
+        ],
+        "decisions": [
+          { "kind": "decision", "text": "Retries are keyed by delivery id, so a retry after a timeout can't send twice." },
+          { "kind": "assumption", "text": "Endpoints answering 410 Gone are disabled at once, not retried. Check with the platform team." },
+          { "kind": "you_said", "text": "“Don't change the public webhook payload in this PR.”" }
+        ],
+        "notDone": ["No dashboard for failing endpoints yet", "Backoff limits are constants, not per-customer settings"],
+        "turns": 4, "updatedAgo": 240
+      }
+    }
+  },
+  "settings": {
+    "demo": true,
+    "slack": { "enabled": true },
+    "standup": { "enabled": true, "times": [23] }
+  },
+  "shared": {
+    "cc.linear": {
+      "at": 300,
+      "issues": [
+        { "identifier": "ENG-412", "title": "Retry webhook deliveries with backoff", "state": "In Progress", "stateType": "started", "priority": 2, "url": "https://linear.app/acme/issue/ENG-412", "branchName": "eng-412-retry-webhooks", "project": "Platform" },
+        { "identifier": "ENG-431", "title": "Rate-limit the public API", "state": "In Progress", "stateType": "started", "priority": 1, "url": "https://linear.app/acme/issue/ENG-431", "branchName": "eng-431-rate-limit", "project": "Platform" },
+        { "identifier": "ENG-405", "title": "Notification settings tab", "state": "In Review", "stateType": "started", "priority": 3, "url": "https://linear.app/acme/issue/ENG-405", "branchName": "eng-405-notification-settings", "project": "Web" },
+        { "identifier": "ENG-377", "title": "Resumable backfill for the events table", "state": "In Review", "stateType": "started", "priority": 3, "url": "https://linear.app/acme/issue/ENG-377", "branchName": "eng-377-resumable-backfill", "project": "Data" },
+        { "identifier": "ENG-440", "title": "Export the audit log as CSV", "state": "Todo", "stateType": "unstarted", "priority": 2, "url": "https://linear.app/acme/issue/ENG-440", "branchName": "eng-440-audit-export", "project": "Platform", "description": "Admins need to download the audit log for compliance reviews. CSV, filtered by date range and actor." },
+        { "identifier": "ENG-442", "title": "Flaky test: checkout total with coupons", "state": "Todo", "stateType": "unstarted", "priority": 4, "url": "https://linear.app/acme/issue/ENG-442", "branchName": "eng-442-flaky-coupon-test", "project": "Web" },
+        { "identifier": "ENG-450", "title": "Dark mode for the docs site", "state": "Backlog", "stateType": "backlog", "priority": 0, "url": "https://linear.app/acme/issue/ENG-450", "branchName": "eng-450-docs-dark-mode", "project": "Docs" }
+      ]
+    },
+    "cc.github": {
+      "prs": [
+        { "spaceName": "checkout-api", "branch": "eng-412-retry-webhooks", "number": 88, "title": "ENG-412: retry webhook deliveries with backoff", "url": "https://github.com/acme/checkout-api/pull/88", "ci": "pending", "failed": [], "review": "REVIEW_REQUIRED" },
+        { "spaceName": "web-app", "branch": "eng-405-notification-settings", "number": 91, "title": "ENG-405: notification settings tab", "url": "https://github.com/acme/web-app/pull/91", "ci": "fail", "failed": [{ "name": "lint", "url": "https://github.com/acme/web-app/actions" }], "review": "REVIEW_REQUIRED" },
+        { "spaceName": "data-pipeline", "branch": "eng-377-resumable-backfill", "number": 79, "title": "ENG-377: resumable backfill", "url": "https://github.com/acme/data-pipeline/pull/79", "ci": "pass", "failed": [], "review": "APPROVED" }
+      ],
+      "reviews": [
+        { "number": 102, "title": "Batch writes to the ledger", "url": "https://github.com/acme/payments/pull/102", "repo": "acme/payments", "author": "maya-r" }
+      ]
+    },
+    "cc.slack": {
+      "lastAt": 600,
+      "items": [
+        { "permalink": "https://acme.slack.com/archives/C1/p1", "kind": "ask", "from": "Priya", "channel": "#launch-crew", "text": "Can you confirm the webhook retry limits before Thursday's release?", "due": "Thursday", "urgent": false, "at": 1500, "ticked": false },
+        { "permalink": "https://acme.slack.com/archives/D2/p2", "kind": "ask", "from": "Sam", "channel": "DM", "text": "Could you look at the pricing page copy PR when you get a minute?", "urgent": false, "at": 4200, "ticked": false },
+        { "permalink": "https://acme.slack.com/archives/C3/p3", "kind": "fyi", "from": "Lee", "channel": "#eng", "text": "Staging database credentials were rotated; update your local config.", "urgent": false, "at": 7200, "ticked": false }
+      ]
+    },
+    "cc.usage": {
+      "claude": { "at": 60, "error": null, "windows": [{ "label": "5-hour", "used": 42, "resetsAt": -7300 }, { "label": "Weekly", "used": 61, "resetsAt": -302400 }] },
+      "codex": { "at": 60, "error": null, "windows": [{ "label": "Weekly", "used": 27, "resetsAt": -432000 }] }
+    }
+  },
+  "standup": {
+    "key": "demo", "label": "Monday", "date": "2026-11-09", "at": 36000, "edited": false,
+    "sources": { "commits": 14, "prs": 3, "tasks": 3, "asks": 2 },
+    "bullets": [
+      { "id": "b1", "text": "ENG-412: webhook deliveries now retry with backoff instead of being dropped; PR #88 is up." },
+      { "id": "b2", "text": "ENG-405: finished the notification settings tab (per-channel toggles, quiet hours); PR #91 in review." },
+      { "id": "b3", "text": "ENG-377: backfill resumes per partition after a failure; dry run over 1.28M rows found no conflicts." },
+      { "id": "b4", "text": "Reviewed Maya's ledger batching PR and confirmed retry limits for Thursday's release with Priya." }
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+\e[38;5;209m✻\e[0m Welcome back! \e[2m~/code/checkout-api · eng-412-retry-webhooks\e[0m
+
+\e[2m>\e[0m Work on ENG-412: Retry webhook deliveries with backoff. Keep notes as you go; open a PR when done.
+
+\e[32m●\e[0m Read(src/webhooks/deliver.ts)
+  \e[2m└ Read 186 lines\e[0m
+
+\e[32m●\e[0m Read(src/webhooks/queue.ts)
+  \e[2m└ Read 94 lines\e[0m
+
+\e[32m●\e[0m Deliveries fail once and are dropped. I'll retry with exponential backoff (1s, 4s, 16s, 64s, then
+  give up and mark the endpoint as failing), keyed by delivery id so a retry never sends twice.
+
+\e[32m●\e[0m Update(src/webhooks/deliver.ts)
+  \e[2m└ Added 48 lines, removed 9 lines\e[0m
+
+\e[32m●\e[0m Write(src/webhooks/backoff.ts)
+  \e[2m└ Wrote 37 lines\e[0m
+
+\e[32m●\e[0m Bash(npm test -- webhooks)
+  \e[2m└ 31 passed, 0 failed (2.4s)\e[0m
+
+\e[32m●\e[0m Update(.agents/tasks/ENG-412.md)
+  \e[2m└ Added decisions and one assumption to check\e[0m
+
+\e[32m●\e[0m Bash(gh pr create --title "ENG-412: retry webhook deliveries with backoff")
+  \e[2m└ https://github.com/acme/checkout-api/pull/88\e[0m
+
+\e[38;5;209m✻ Waiting for checks on #88… (1m 12s · esc to interrupt)\e[0m
+
+{rule}
+\e[2m>\e[0m
+{rule}
+  \e[2m⏵⏵ auto mode on (shift+tab to cycle)\e[0m

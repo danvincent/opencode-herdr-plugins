@@ -1,0 +1,17 @@
+\e[32m●\e[0m Grep("rateLimit", src/)
+  \e[2m└ 9 matches in 4 files\e[0m
+
+\e[32m●\e[0m Read(src/api/middleware/limits.ts)
+  \e[2m└ Read 112 lines\e[0m
+
+\e[32m●\e[0m There are two reasonable places to count requests, and they behave differently for teams that
+  share one workspace across many API keys.
+
+{rule}
+ \e[1mHow should rate limits be counted?\e[0m
+
+ \e[36m❯ 1. Per workspace\e[0m   One budget shared by every key in the workspace
+   2. Per API key      Each key gets its own budget
+   3. Type something.
+{rule}
+ \e[2mEnter to select · ↑/↓ to navigate · Esc to cancel\e[0m
