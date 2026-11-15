@@ -78,7 +78,8 @@ export default class Tasks extends View {
       this.watching.add(dir);
       cx.spawn(async (cx) => {
         for (;;) {
-          await watchFolder(dir).catch(() => null);
+          // A repo with no notes folder yet can't be watched: look again in a while rather than at once.
+          if (!(await watchFolder(dir).then(() => true, () => false))) await cx.sleep(30_000);
           for (const k of Object.keys(this.summaries)) if (this.summaries[k]?.dir === dir) delete this.summaries[k];
           cx.notify();
         }
