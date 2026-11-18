@@ -10,6 +10,7 @@ import * as fs from "fs/promises";
 import { USAGE_EVERY, claudeUsage, codexUsage, backoff } from "./usage.js";
 import { withDefaults, patch, loadSettings, saveSettings, inHours } from "./settings.js";
 import { normalizeResult, resolveProvider, runShellAi, isSuccess, shouldCheckAuth } from "./shell-ai.js";
+import { githubTracker, bitbucketTracker, isTrackerEnabled } from "./trackers.js";
 
 // Claude Code lists connectors that need a sign-in here: a free way to know Linear or Slack isn't connected
 // before paying for a run that would find out. Not an official interface, so it's only a hint.
@@ -262,7 +263,7 @@ export default class CcStatus extends View {
     this.publishStandup({ running: true, error: null });
     cx.spawn(async (cx) => {
       try {
-        const local = await gatherLocal(win);
+        const local = await gatherLocal(win, this.settings);
         const r = await this.claude(standupPrompt(win, local), STANDUP_TOOLS, ["--json-schema", STANDUP_SCHEMA], STANDUP_TIMEOUT, this.settings.standup.model, "1");
         const s = r.structured;
         if (!s?.text) throw new Error(String(r.text || s?.error || r.stderr || `${r.provider} exited ${r.code}`).split("\n")[0]);
@@ -271,7 +272,7 @@ export default class CcStatus extends View {
           if (st.key === win.key) remember(st); else st.history = [];
           Object.assign(st, { key: win.key, label: win.label, date: win.date, bullets: toBullets(s.text), edited: false,
             note: s.error || null, at: Date.now(), slot: slot?.id ?? st.slot ?? null,
-            sources: { commits: local.commits.length, prs: local.prs.length, tasks: local.tasks.length, asks: local.slack.length }, cost: r.cost });
+            sources: { commits: local.commits.length, prs: local.prs.length, jira: (local.issues ?? []).length, tasks: local.tasks.length, asks: local.slack.length, prErrors: (local.prErrors ?? []).length, issueErrors: (local.issueErrors ?? []).length }, cost: r.cost });
         }, { running: false, error: null });
       } catch (e) {
         // A failed scheduled run still uses up its slot; Write now retries.
@@ -474,20 +475,36 @@ export default class CcStatus extends View {
       try {
         const prev = shared("cc.github") ?? {};
         const prs = [];
-        for (const t of await this.targets()) {
-          const r = await exec("gh", ["pr", "view", t.branch, "--json", "number,title,url,state,isDraft,reviewDecision,statusCheckRollup"], { cwd: t.repo, timeout: 20_000 }).catch(() => null);
-          if (r?.code !== 0) continue;
-          const pr = JSON.parse(r.stdout);
-          if (pr.state !== "OPEN") continue;
-          prs.push({ ...t, number: pr.number, title: pr.title, url: pr.url, draft: pr.isDraft, review: pr.reviewDecision, ...ciState(pr.statusCheckRollup) });
+        const targets = await this.targets();
+        for (const t of targets) {
+          // Same `gh pr view` flags as always, through the github tracker.
+          const pr = await githubTracker.getBranchPR(exec, t.repo, t.branch);
+          if (!pr || (pr.state ?? "").toLowerCase() !== "open") continue;
+          prs.push({ ...t, source: "github", number: pr.number, title: pr.title, url: pr.url, draft: pr.draft, review: pr.review, ...ciState(pr.statusCheckRollup) });
         }
+        // Bitbucket branches with an open PR, matched by branch name. Best
+        // effort: an unconfigured tracker is skipped, never an error.
+        try {
+          const env = (k) => (typeof process !== "undefined" ? process.env?.[k] : undefined);
+          if (isTrackerEnabled(this.settings, "bitbucket") && bitbucketTracker.isConfigured(this.settings, env)) {
+            const now = Date.now();
+            const bb = await bitbucketTracker.listPRs({ fetch: globalThis.fetch, getEnv: env }, this.settings, { from: now - 90 * 86_400_000, until: now });
+            if (bb.status === "ok") for (const p of bb.prs) {
+              if ((p.state ?? "").toLowerCase() !== "open" || !p.branch) continue;
+              const t = targets.find((x) => x.branch === p.branch);
+              if (t && !prs.some((x) => x.branch === t.branch)) prs.push({ ...t, source: "bitbucket", number: p.number, title: p.title, url: p.url, draft: p.draft, review: null, ...ciState(null) });
+            }
+          }
+        } catch { /* bitbucket is additive: github results stand alone */ }
         let reviews = prev.reviews ?? [];
         if (forceReviews || Date.now() - this.reviewsAt >= REVIEWS_EVERY) {
           // Direct requests by default: team requests (review-requested) can flood the list.
           const scope = this.settings.github.reviews === "all" ? "--review-requested=@me" : "user-review-requested:@me";
-          const r = await exec("gh", ["search", "prs", scope, "--state=open", "--json", "number,title,url,repository,author", "--limit", "20"], { timeout: 20_000 });
-          if (r.code !== 0) throw new Error(r.stderr.trim().split("\n")[0] || "gh search failed");
-          reviews = JSON.parse(r.stdout).map((x) => ({ number: x.number, title: x.title, url: x.url, repo: x.repository?.nameWithOwner ?? "", author: x.author?.login ?? "" }));
+          try {
+            reviews = await githubTracker.listReviews(exec, scope);
+          } catch (e) {
+            throw new Error(String(e?.message ?? e).split("\n")[0] || "gh search failed");
+          }
           this.reviewsAt = Date.now();
         }
         const next = { prs, reviews };

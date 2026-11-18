@@ -5,6 +5,7 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { shared, setShared, theme, props, closeOverlay, home } from "herdr";
+import { trackerDraft, writeTrackerInputs } from "./trackers.js";
 
 const HOURS = [{ id: "9-19", label: "09–19", v: [9, 19] }, { id: "7-22", label: "07–22", v: [7, 22] }, { id: "0-24", label: "All day", v: [0, 24] }];
 const MODELS = [{ id: "haiku", label: "Haiku" }, { id: "sonnet", label: "Sonnet" }];
@@ -28,13 +29,28 @@ export function dailyCost(s) {
 export default class Settings extends View {
   init(_props, cx) {
     const s = shared("cc.settings");
+    // Merged (not cloned raw): partial legacy settings get full
+    // bitbucket/jira defaults from withDefaults, so save-path reads below
+    // never crash on a missing section.
+    const trackers = clone(trackerDraft(s));
     this.draft = s ? clone({ repoRoots: s.repoRoots, github: s.github, linear: s.linear, slack: s.slack, standup: s.standup, usage: s.usage, ai: { provider: s?.ai?.provider === "opencode" ? "opencode" : "claude" } }) : null;
+    if (this.draft) this.draft.trackers = trackers;
     this.roots = InputState.new({ value: (s?.repoRoots ?? []).map(tilde).join(", "), placeholder: "Leave empty: the folders of the repos open in Herdr" });
+    this.bbWorkspace = InputState.new({ value: trackers.bitbucket?.workspace ?? "", placeholder: "your-workspace" });
+    this.bbBase = InputState.new({ value: trackers.bitbucket?.baseUrl ?? "", placeholder: "https://api.bitbucket.org/2.0 (optional)" });
+    this.jiraBase = InputState.new({ value: trackers.jira?.baseUrl ?? "", placeholder: "https://yourdomain.atlassian.net" });
     this.handle = cx.focus_handle();
   }
 
   save() {
+    // Settings may still be loading (draft null): Save is a no-op, not a crash.
+    if (!this.draft) return;
     const roots = this.roots.value().split(",").map(untilde).filter(Boolean);
+    this.draft.trackers = writeTrackerInputs(this.draft.trackers, {
+      workspace: this.bbWorkspace.value(),
+      bbBase: this.bbBase.value(),
+      jiraBase: this.jiraBase.value(),
+    });
     setShared("cc.settings.update", { patch: { ...this.draft, repoRoots: roots.length ? roots : null }, at: Date.now() });
     closeOverlay(props()?.overlay);
   }
@@ -84,6 +100,27 @@ export default class Settings extends View {
           row("Check every", every("linear", [15, 30, 60])),
           row("Between", hours("linear")),
           row("Model", seg("lin-model", MODELS, d.linear.model, (v) => { d.linear.model = v; })),
+        ]))
+        .child(card("bb", "Bitbucket", "PRs from Bitbucket Cloud over REST, alongside GitHub. Free.", d.trackers.bitbucket.enabled, () => {
+          const on = !d.trackers.bitbucket.enabled;
+          d.trackers.bitbucket.enabled = on;
+          const r = new Set(d.trackers.repositories);
+          if (on) r.add("bitbucket"); else r.delete("bitbucket");
+          d.trackers.repositories = [...r];
+        }, [
+          row("Workspace", Input.new(this.bbWorkspace).h(32).px(10).rounded(7).border_1().border_color(t.input).bg(t.popover).text_size(12.5), "Lowercase slug from your bitbucket.org URL"),
+          row("API base", Input.new(this.bbBase).h(32).px(10).rounded(7).border_1().border_color(t.input).bg(t.popover).text_size(12.5), "Empty means the public Cloud API"),
+          div().pt(2).text_size(11).text_color(t.dim).child("Auth uses env ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN (an Atlassian API token). This file keeps only the workspace and URLs — never secrets. Missing config is skipped, never an error."),
+        ]))
+        .child(card("jr", "Jira", "Issues assigned to you, over REST, alongside Linear. Free.", d.trackers.jira.enabled, () => {
+          const on = !d.trackers.jira.enabled;
+          d.trackers.jira.enabled = on;
+          const ids = new Set(d.trackers.issues);
+          if (on) ids.add("jira"); else ids.delete("jira");
+          d.trackers.issues = [...ids];
+        }, [
+          row("Site URL", Input.new(this.jiraBase).h(32).px(10).rounded(7).border_1().border_color(t.input).bg(t.popover).text_size(12.5), "Like https://yourdomain.atlassian.net"),
+          div().pt(2).text_size(11).text_color(t.dim).child("Auth uses env ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN (ATLASSIAN_BASE_URL works when the field is empty). The standup pulls issues updated that day; nothing secret is stored here."),
         ]))
         .child(card("sl", "Slack sweep", "Asks in your DMs and @-mentions, through Claude's Slack connector. Read only.", d.slack.enabled, () => { d.slack.enabled = !d.slack.enabled; }, [
           row("Sweep every", every("slack", [30, 60, 120])),

@@ -13,6 +13,13 @@ import {
   runShellAi,
 } from "./shell-ai.js";
 import { DEFAULTS, withDefaults } from "./settings.js";
+import {
+  JIRA_MCP_TOOLS,
+  BITBUCKET_MCP_TOOLS,
+  mcpToolsFor,
+  jiraMcpPrompt,
+  bitbucketMcpPrompt,
+} from "./trackers.js";
 
 const PROMPT = "list my issues";
 const TOOLS = ["ToolSearch", "mcp__claude_ai_Linear__list_issues"];
@@ -229,5 +236,80 @@ describe("settings", () => {
   });
   it("keeps an opencode selection through withDefaults", () => {
     assert.equal(withDefaults({ ai: { provider: "opencode" } }).ai.provider, "opencode");
+  });
+});
+
+describe("MCP tool selection per provider (Claude tools vs OpenCode prompt-only)", () => {
+  const WIN = { from: new Date("2026-11-17T00:00:00Z").getTime(), until: new Date("2026-11-17T23:59:59Z").getTime(), date: "2026-11-17" };
+  const deps = (seen) => ({
+    home: () => "/home/u",
+    appHome: () => "/tmp/cc-test-home",
+    exec: async (cmd, args, opts) => {
+      seen.push({ cmd, args, opts });
+      if (cmd === "mkdir") return { code: 0, stdout: "", stderr: "" };
+      if (String(cmd).endsWith("/claude")) {
+        return { code: 0, stdout: JSON.stringify({ result: "r", structured_output: { x: 1 }, total_cost_usd: 0 }), stderr: "" };
+      }
+      return { code: 0, stdout: "ok text", stderr: "" };
+    },
+  });
+  it("claude passes Jira MCP tools through --allowedTools byte-for-byte", async () => {
+    const seen = [];
+    const tools = mcpToolsFor("jira");
+    assert.deepEqual(tools, JIRA_MCP_TOOLS);
+    const r = await runShellAi(deps(seen), {}, {
+      prompt: jiraMcpPrompt(WIN, {}), tools, extra: [], timeout: 1000, model: "haiku", budget: "0.5",
+    });
+    const call = seen.find((c) => c.cmd !== "mkdir");
+    assert.deepEqual(call.args, claudeArgs(jiraMcpPrompt(WIN, {}), JIRA_MCP_TOOLS, "haiku", "0.5", []));
+    assert.ok(call.args.join(" ").includes("mcp__atlassian-mcp__jira_search"));
+    assert.equal(r.provider, "claude");
+  });
+  it("claude passes Bitbucket MCP tools through --allowedTools byte-for-byte", async () => {
+    const seen = [];
+    const tools = mcpToolsFor("bitbucket");
+    assert.deepEqual(tools, BITBUCKET_MCP_TOOLS);
+    const r = await runShellAi(deps(seen), {}, {
+      prompt: bitbucketMcpPrompt(WIN, { workspace: "acme" }), tools, extra: [], timeout: 1000, model: "haiku", budget: "0.5",
+    });
+    const call = seen.find((c) => c.cmd !== "mkdir");
+    assert.deepEqual(call.args, claudeArgs(bitbucketMcpPrompt(WIN, { workspace: "acme" }), BITBUCKET_MCP_TOOLS, "haiku", "0.5", []));
+    assert.equal(r.provider, "claude");
+  });
+  it("opencode carries MCP instructions in the prompt only, never as flags", async () => {
+    const seen = [];
+    const prompt = `${jiraMcpPrompt(WIN, {})}\n${bitbucketMcpPrompt(WIN, { workspace: "acme" })}`;
+    const r = await runShellAi(deps(seen), { ai: { provider: "opencode" } }, {
+      prompt, tools: [...JIRA_MCP_TOOLS, ...BITBUCKET_MCP_TOOLS], extra: [], timeout: 1000,
+    });
+    const call = seen.find((c) => c.cmd !== "mkdir");
+    assert.equal(call.cmd, "opencode");
+    assert.deepEqual(call.args, ["run", prompt]);
+    assert.ok(call.args[1].includes("atlassian-mcp"));
+    assert.ok(call.args[1].includes("bitbucket-mcp"));
+    assert.ok(!call.args.join(" ").includes("--allowedTools"));
+    assert.ok(!call.args.join(" ").includes("--tools"));
+    assert.equal(r.provider, "opencode");
+  });
+  it("opencode MCP fallback: a failed MCP run still leaves REST data usable", async () => {
+    const { listAllIssues } = await import("./trackers.js");
+    const s = withDefaults({});
+    const getEnvEmpty = () => undefined;
+    const r = await listAllIssues({ fetch: async () => { throw new Error("must not fetch when skipped"); }, getEnv: getEnvEmpty }, s, WIN);
+    assert.deepEqual(r.issues, []);
+    assert.deepEqual(r.errors, []);
+  });
+  it("OpenCode ignores mcpToolsFor: tracker tools never become CLI flags", async () => {
+    const seen = [];
+    const tools = [...mcpToolsFor("jira"), ...mcpToolsFor("bitbucket"), ...mcpToolsFor("github"), ...mcpToolsFor("linear")];
+    assert.ok(tools.length > 2);
+    const r = await runShellAi(deps(seen), { ai: { provider: "opencode" } }, {
+      prompt: PROMPT, tools, extra: [], timeout: 1000, model: "sonnet", budget: "1",
+    });
+    const call = seen.find((c) => c.cmd !== "mkdir");
+    assert.equal(call.cmd, "opencode");
+    assert.deepEqual(call.args, ["run", PROMPT]);
+    assert.ok(!call.args.join("\n").includes("--"));
+    assert.equal(r.provider, "opencode");
   });
 });
