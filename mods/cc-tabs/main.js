@@ -1,15 +1,28 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, agents, run, openOverlay, theme, window, shared, layout, settings, nextCommand } from "herdr";
+import { visibleProviderTabs } from "../cc-status/providers.js";
 
 // Cloned from Herdr's `tabs` (0.1.15): the side-panel buttons are ours.
 const PANELS = [
   { id: "inbox", label: "Inbox", icon: "mods/cc-tabs/inbox.svg" },
+  { id: "bitbucket", label: "Bitbucket", icon: "mods/cc-tabs/bitbucket.svg" },
   { id: "linear", label: "Linear", icon: "mods/cc-tabs/linear.svg" },
+  { id: "jira", label: "Jira", icon: "mods/cc-tabs/jira.svg" },
   { id: "tasks", label: "Tasks", icon: "mods/cc-tabs/tasks.svg" },
   { id: "files", label: "Files", icon: "mods/files/file.svg" },
   { id: "changes", label: "Changes", icon: "mods/changes/changes.svg" },
 ];
+
+// Provider tabs (bitbucket, linear, jira) appear only when enabled AND
+// configured: enabled-but-unconfigured and disabled both hide. setupHint is
+// settings/status guidance only, not a visible tab. Legacy settings keep the
+// default GitHub + Linear layout.
+function isPanelVisible(p) {
+  const s = shared("cc.settings") ?? {};
+  if (p.id === "linear" || p.id === "bitbucket" || p.id === "jira") return visibleProviderTabs(s).includes(p.id);
+  return true;
+}
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -127,7 +140,7 @@ export default class Tabs extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
-    const enabled = PANELS.map((p) => p.id);
+    const enabled = PANELS.filter(isPanelVisible).map((p) => p.id);
     this.syncPanel(space, panel, body, enabled);
     const count = inboxCount();
     const panelButton = ({ id, label, icon }) => {
@@ -157,8 +170,8 @@ export default class Tabs extends View {
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
-      // "I don't use Linear" (settings) hides its button.
-      .children(PANELS.filter((p) => p.id !== "linear" || shared("cc.settings")?.linear?.enabled !== false).map(panelButton))
+      // "I don't use Linear" (settings) hides its button; Bitbucket/Jira follow tracker enablement.
+      .children(PANELS.filter(isPanelVisible).map(panelButton))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));

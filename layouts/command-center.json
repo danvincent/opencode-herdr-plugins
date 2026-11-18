@@ -179,10 +179,24 @@
                       }
                     },
                     {
+                      "id": "bitbucket",
+                      "type": "block",
+                      "content": {
+                        "mod": "cc-bitbucket"
+                      }
+                    },
+                    {
                       "id": "linear",
                       "type": "block",
                       "content": {
                         "mod": "cc-linear"
+                      }
+                    },
+                    {
+                      "id": "jira",
+                      "type": "block",
+                      "content": {
+                        "mod": "cc-jira"
                       }
                     },
                     {

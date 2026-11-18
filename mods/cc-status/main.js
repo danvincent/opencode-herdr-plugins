@@ -10,7 +10,8 @@ import * as fs from "fs/promises";
 import { USAGE_EVERY, claudeUsage, codexUsage, backoff } from "./usage.js";
 import { withDefaults, patch, loadSettings, saveSettings, inHours } from "./settings.js";
 import { normalizeResult, resolveProvider, runShellAi, isSuccess, shouldCheckAuth } from "./shell-ai.js";
-import { githubTracker, bitbucketTracker, isTrackerEnabled } from "./trackers.js";
+import { githubTracker, bitbucketTracker, jiraTracker, isTrackerEnabled, sanitizeError } from "./trackers.js";
+import { providerStatus } from "./providers.js";
 
 // Claude Code lists connectors that need a sign-in here: a free way to know Linear or Slack isn't connected
 // before paying for a run that would find out. Not an official interface, so it's only a hint.
@@ -89,7 +90,8 @@ export default class CcStatus extends View {
     this.reading = new Set();
     this.linearBusy = false;
     this.handled = { request: shared("cc.linear.request") ?? 0, move: shared("cc.linear.move")?.at ?? 0,
-      slackRequest: shared("cc.slack.request") ?? 0, slackAction: shared("cc.slack.action")?.at ?? 0 };
+      slackRequest: shared("cc.slack.request") ?? 0, slackAction: shared("cc.slack.action")?.at ?? 0,
+      trackers: shared("cc.trackers.request") ?? 0 };
     this.slackBusy = false;
     this.slackPath = `${appHome()}/data/cc-slack/state.json`;
     this.slackQueue = Promise.resolve();
@@ -119,7 +121,7 @@ export default class CcStatus extends View {
       for (;;) {
         const c = await nextCommand();
         if (c === "linear") this.linear(cx, true);
-        if (c === "github") this.refresh(cx, true);
+        if (c === "github" || c === "bitbucket" || c === "jira") this.refresh(cx, true);
         if (c === "slack") this.slack(cx, true);
         if (c === "standup") this.standup(cx);
         if (c === "usage") this.usage(cx, true);
@@ -208,7 +210,8 @@ export default class CcStatus extends View {
     const st = this.settings, now = Date.now(), hour = new Date().getHours();
     cx.spawn(async () => { await this.readSettings(); if (!st.repoRoots) await this.findAutoRoots(); });
     this.usage(cx);
-    if (st.github.enabled && now - this.lastRun >= st.github.everyMin * 60_000) this.refresh(cx, false);
+    const sweepOn = st.github.enabled || isTrackerEnabled(st, "bitbucket") || isTrackerEnabled(st, "jira");
+    if (sweepOn && now - this.lastRun >= st.github.everyMin * 60_000) this.refresh(cx, false);
     // While a connector isn't connected, scheduled runs wait; opening the panel or Check again asks.
     const l = shared("cc.linear") ?? {};
     if (st.linear.enabled && !l.notConnected && inHours(hour, st.linear.hours)
@@ -429,6 +432,9 @@ export default class CcStatus extends View {
     const request = shared("cc.linear.request") ?? 0, move = shared("cc.linear.move");
     if (request > this.handled.request) { this.handled.request = request; this.linear(cx, true); }
     if (move?.at > this.handled.move) { this.handled.move = move.at; this.moveToStarted(cx, move.identifier); }
+    // The Bitbucket/Jira tabs ask through one shared request; refresh covers both trackers.
+    const treq = shared("cc.trackers.request") ?? 0;
+    if (treq > this.handled.trackers) { this.handled.trackers = treq; this.refresh(cx, true); }
     const ureq = shared("cc.usage.request") ?? 0;
     if (ureq > (this.handled.usage ?? 0)) { this.handled.usage = ureq; this.usage(cx, true); }
     const streq = shared("cc.standup.request") ?? 0;
@@ -509,6 +515,10 @@ export default class CcStatus extends View {
         }
         const next = { prs, reviews };
         if (!same(next, { prs: prev.prs, reviews: prev.reviews })) setShared("cc.github", next);
+        // Bitbucket and Jira list views read REST directly (MCP-first lives in
+        // the standup headless prompt). Each tracker publishes its own shared
+        // state, so a Bitbucket/Jira failure never touches the GitHub string.
+        await this.syncTrackers().catch(() => {});
         this.error = null;
       } catch (e) {
         this.error = String(e?.message ?? e).slice(0, 120);
@@ -517,6 +527,32 @@ export default class CcStatus extends View {
         cx.notify();
       }
     });
+  }
+
+  // Bitbucket/Jira REST lists for their tabs (the standup MCP-first prompts are
+  // untouched). Enabled but unconfigured is skipped, never an error; each
+  // provider's failure is published to its own state only.
+  async syncTrackers() {
+    const env = (k) => (typeof process !== "undefined" ? process.env?.[k] : undefined);
+    const deps = { fetch: globalThis.fetch, getEnv: env };
+    if (isTrackerEnabled(this.settings, "bitbucket")) {
+      const prev = shared("cc.bitbucket") ?? {};
+      setShared("cc.bitbucket", { ...prev, running: true });
+      const win = { from: Date.now() - 90 * 86_400_000, to: Date.now() };
+      const r = await bitbucketTracker.listPRs(deps, this.settings, win).catch((e) => ({ status: "error", prs: [], error: sanitizeError(e) }));
+      if (r.status === "skipped") setShared("cc.bitbucket", { ...prev, prs: [], running: false, notConfigured: true, error: null });
+      else if (r.status === "ok") setShared("cc.bitbucket", { prs: r.prs ?? [], at: Date.now(), running: false, notConfigured: false, error: null });
+      else setShared("cc.bitbucket", { ...prev, prs: [], running: false, error: r.error ?? r.status });
+    }
+    if (isTrackerEnabled(this.settings, "jira")) {
+      const prev = shared("cc.jira") ?? {};
+      setShared("cc.jira", { ...prev, running: true });
+      const win = { from: Date.now() - 86_400_000, to: Date.now() };
+      const r = await jiraTracker.listIssues(deps, this.settings, win).catch((e) => ({ status: "error", issues: [], error: sanitizeError(e) }));
+      if (r.status === "skipped") setShared("cc.jira", { ...prev, issues: [], running: false, notConfigured: true, error: null });
+      else if (r.status === "ok") setShared("cc.jira", { issues: r.issues ?? [], at: Date.now(), running: false, notConfigured: false, error: null });
+      else setShared("cc.jira", { ...prev, issues: [], running: false, error: r.error ?? r.status });
+    }
   }
 
   // Reads a blocked agent's screen once per blocked spell; drops agents that moved on.
@@ -560,6 +596,10 @@ export default class CcStatus extends View {
     const asks = (sl.items ?? []).filter((i) => i.kind === "ask" && !i.ticked).length;
     const slSync = sl.running ? "Slack: sweeping…" : sl.notConnected ? "Slack: not connected" : sl.error ? "Slack: failed" : sl.lastAt ? `Slack ${ago(sl.lastAt)}` : "Slack";
     const st = this.settings;
+    // Per-provider strings: a Bitbucket/Jira failure shows only on its own
+    // entry, never on GitHub's, and vice versa. Disabled trackers hide.
+    const bbStatus = providerStatus("bitbucket", st, shared("cc.bitbucket") ?? {});
+    const jrStatus = providerStatus("jira", st, shared("cc.jira") ?? {});
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
       .when(Boolean(space?.branch), (el) => el.child(label("branch", space.branch)))
@@ -575,6 +615,10 @@ export default class CcStatus extends View {
         .on_click((_e, cx) => { this.linear(cx, true); cx.notify(); }).child(linSync)))
       .when(st.github.enabled, (el) => el.child(div().id("cc-sync").text_color(this.error ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
         .on_click((_e, cx) => { this.refresh(cx, true); cx.notify(); }).child(sync)))
+      .when(bbStatus.state !== "disabled", (el) => el.child(div().id("cc-bitbucket-sync").text_color(bbStatus.state === "error" ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
+        .on_click((_e, cx) => { this.refresh(cx, true); cx.notify(); }).child(bbStatus.text)))
+      .when(jrStatus.state !== "disabled", (el) => el.child(div().id("cc-jira-sync").text_color(jrStatus.state === "error" ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
+        .on_click((_e, cx) => { this.refresh(cx, true); cx.notify(); }).child(jrStatus.text)))
       .child(div().id("cc-settings").text_color(this.settingsError ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
         .on_click(() => openOverlay({ mod: "cc-settings", kind: "dialog", width: 640, height: 0.85 }))
         .child(this.settingsError ? "Settings: file has an error" : "Settings"))

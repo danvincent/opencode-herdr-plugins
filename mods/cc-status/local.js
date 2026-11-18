@@ -5,7 +5,7 @@
 // Window shape is windowFor()'s {key,date,label,from,to}; legacy {from,until}
 // windows are accepted too (see windowEnd in trackers.js).
 
-import { listAllPRs, listAllIssues, formatPRsForPrompt, formatIssuesForPrompt, windowEnd, JIRA_MCP_READ, BITBUCKET_MCP_TOOLS } from "./trackers.js";
+import { listAllPRs, listAllIssues, formatPRsForPrompt, formatIssuesForPrompt, windowEnd, jiraWindowJql, JIRA_MCP_READ, BITBUCKET_MCP_TOOLS } from "./trackers.js";
 
 export const STANDUP_TIMEOUT = 420_000;
 // MCP-first: Linear + Slack on the claude.ai connector, Jira via
@@ -149,7 +149,7 @@ export function standupPrompt(win, local) {
   return `Write my standup answer to "What did you accomplish?" for ${win.label}, ${win.date}. Nobody reads a chat; your answer is the JSON.
 Load the Linear, Slack, Jira (atlassian-mcp) and Bitbucket (bitbucket-mcp) tools with ToolSearch, then:
 1. Linear: issues assigned to me or that I commented on or moved between ${win.date} 00:00 and 23:59 my time. Read only.
-Jira first via the atlassian-mcp MCP server (Jira+Confluence only): mcp__atlassian-mcp__jira_search with JQL 'assignee = currentUser() AND updated >= "${win.date}" AND updated <= "${win.date}"', paginate every page, mcp__atlassian-mcp__jira_get_issue for details. Read only: never transition or comment. Jira issues already collected over REST (ATLASSIAN_* fallback) are listed below under "Jira issues updated"; use that list when no Jira MCP tools are available.
+Jira first via the atlassian-mcp MCP server (Jira+Confluence only): mcp__atlassian-mcp__jira_search with JQL '${jiraWindowJql(win)}', paginate every page, mcp__atlassian-mcp__jira_get_issue for details. Read only: never transition or comment. Jira issues already collected over REST (ATLASSIAN_* fallback) are listed below under "Jira issues updated"; use that list when no Jira MCP tools are available.
 Bitbucket first via the bitbucket-mcp MCP server: mcp__bitbucket-mcp__list_pull_requests (or get_pull_requests) for the window with a state filter, paginate every page, mcp__bitbucket-mcp__get_pull_request with comments/diff for details. Read only. Pull requests already collected over REST are listed below; use that list when no Bitbucket MCP tools are available.
 2. Slack: messages I sent in that window (from:me), for work that didn't leave a commit: reviews, debugging help, decisions. Read only.
 

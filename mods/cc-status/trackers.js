@@ -309,12 +309,29 @@ export const linearTracker = {
 const jiraBase = (settings, getEnv) =>
   (settings?.trackers?.jira?.baseUrl?.trim() || envOf(getEnv)("ATLASSIAN_BASE_URL") || envOf(getEnv)("JIRA_BASE_URL") || "").replace(/\/+$/, "");
 
+// GitHub listPRs intention is `author=@me + updated in window`
+// (`--author=@me --updated=<date>..<date>` where date = windowDate).
+// Jira mirrors it: `assignee = currentUser() AND updated in window`,
+// window-aware with the same to/until handling via windowEnd
+// (timezone-safe local ymd, same date GitHub would search).
+// Lower bound pins the start of the first day; the upper bound is exclusive
+// next-day midnight (`updated < "next-day 00:00"`) so the full final day is
+// covered without minute-boundary risk. Jira reads a bare
+// `updated <= "YYYY-MM-DD"` as that day's midnight, which omits final-day
+// updates and collapses single-day (d0==d1) windows to empty.
+const nextDayYmd = (d) => {
+  const [y, m, day] = String(d).split("-").map(Number);
+  const dt = new Date(y, m - 1, day);
+  dt.setDate(dt.getDate() + 1);
+  return ymd(dt.getTime());
+};
 const jiraJql = (win) => {
   if (win?.from != null && windowEnd(win) != null) {
     const d0 = ymd(win.from), d1 = ymd(windowEnd(win));
-    return `assignee = currentUser() AND updated >= "${d0}" AND updated <= "${d1}" ORDER BY updated DESC`;
+    return `assignee = currentUser() AND updated >= "${d0} 00:00" AND updated < "${nextDayYmd(d1)} 00:00" ORDER BY updated DESC`;
   }
-  return "assignee = currentUser() AND updated >= startOfDay(-1d) ORDER BY updated DESC";
+  const d = windowDate(win);
+  return `assignee = currentUser() AND updated >= "${d} 00:00" AND updated < "${nextDayYmd(d)} 00:00" ORDER BY updated DESC`;
 };
 
 export const jiraTracker = {

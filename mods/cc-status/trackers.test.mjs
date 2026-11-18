@@ -315,11 +315,61 @@ describe("MCP tool selection (MCP-first, REST fallback)", () => {
     assert.deepEqual(mcpToolsFor("linear"), []);
     assert.deepEqual(mcpToolsFor("bogus"), []);
   });
-  it("window JQL pins assignee + updated time window", () => {
+  it("window JQL mirrors GitHub intention: assignee=@me + updated in window", () => {
+    // GitHub listPRs intention is `--author=@me --updated=<date>..<date>` where
+    // date = win.date ?? ymd(from). Jira mirrors it as assignee + updated window.
     const jql = jiraWindowJql(WIN);
+    assert.equal(jql, 'assignee = currentUser() AND updated >= "2026-11-17 00:00" AND updated < "2026-11-18 00:00" ORDER BY updated DESC');
+    assert.ok(jql.includes("assignee = currentUser()"));
+    assert.ok(jql.includes("updated"));
+  });
+  it("jira JQL shares exact window semantics with GitHub search (to/until via windowEnd)", () => {
+    const WIN_TO_LOCAL = { key: "2026-11-17", date: "2026-11-17", label: "Monday", from: new Date("2026-11-17T00:00:00Z").getTime(), to: new Date("2026-11-17T23:59:59Z").getTime() };
+    // Same window via legacy `until` must produce the same JQL.
+    assert.equal(jiraWindowJql(WIN_TO_LOCAL), jiraWindowJql(WIN));
+    // GitHub window date for both shapes is the same single day.
+    const ghDate = (w) => w?.date ?? "2026-11-17";
+    assert.equal(ghDate(WIN_TO_LOCAL), ghDate(WIN));
+    assert.ok(jiraWindowJql(WIN_TO_LOCAL).includes(ghDate(WIN_TO_LOCAL)));
+  });
+  it("jira JQL stays window-aware for date-only windows (same date GitHub would search)", () => {
+    const dateOnly = { date: "2026-11-17" };
+    const jql = jiraWindowJql(dateOnly);
     assert.ok(jql.includes("assignee = currentUser()"));
     assert.ok(jql.includes("2026-11-17"));
     assert.ok(jql.includes("updated"));
+  });
+});
+
+describe("jira JQL time bounds (single-day + late-final-day regression)", () => {
+  it("single-day window (d0==d1) emits a full-day time-bounded range, not midnight-collapsed", () => {
+    // WIN spans one day; bare `updated <= "YYYY-MM-DD"` reads as midnight in
+    // Jira and matches nothing updated after 00:00. The exclusive next-day
+    // upper bound covers the full final day without minute-boundary risk.
+    const jql = jiraWindowJql(WIN);
+    assert.ok(jql.includes('updated >= "2026-11-17 00:00"'), `lower bound must pin start of day: ${jql}`);
+    assert.ok(jql.includes('updated < "2026-11-18 00:00"'), `upper bound must be exclusive next-day midnight: ${jql}`);
+    assert.ok(!jql.includes('updated <= "2026-11-17 23:59"'), `must not use inclusive minute upper bound: ${jql}`);
+  });
+  it("late-final-day updates fall inside the emitted JQL window", () => {
+    const jql = jiraWindowJql(WIN);
+    assert.ok(jql.includes('updated < "2026-11-18 00:00"'), `exclusive upper bound required: ${jql}`);
+    const bounds = [...jql.matchAll(/"(\d{4}-\d{2}-\d{2} \d{2}:\d{2})"/g)].map((m) => m[1]);
+    assert.equal(bounds.length, 2);
+    const lo = Date.parse(`${bounds[0].replace(" ", "T")}:00`);
+    const hiExclusive = Date.parse(`${bounds[1].replace(" ", "T")}:00`);
+    for (const t of ["2026-11-17T00:00:00", "2026-11-17T12:00:00", "2026-11-17T23:45:00", "2026-11-17T23:59:00", "2026-11-17T23:59:59"]) {
+      const ts = Date.parse(t);
+      assert.ok(ts >= lo && ts < hiExclusive, `${t} must fall inside exclusive JQL window ${bounds.join(" .. ")}`);
+    }
+    assert.ok(!(Date.parse("2026-11-18T00:00:00") >= lo && Date.parse("2026-11-18T00:00:00") < hiExclusive) === false ||
+      Date.parse("2026-11-18T00:00:00") >= hiExclusive, "next-day midnight is exclusive");
+  });
+  it("multi-day windows span start-of-first-day to exclusive next-day midnight", () => {
+    const multi = { from: new Date("2026-11-15T00:00:00Z").getTime(), until: new Date("2026-11-17T23:59:59Z").getTime() };
+    const jql = jiraWindowJql(multi);
+    assert.ok(jql.includes('updated >= "2026-11-15 00:00"'), jql);
+    assert.ok(jql.includes('updated < "2026-11-18 00:00"'), jql);
   });
 });
 
@@ -333,6 +383,22 @@ describe("MCP prompt content (Claude + OpenCode prompt-only)", () => {
     assert.ok(/read only/i.test(p));
     assert.ok(/pagina/i.test(p));
     assert.ok(p.includes("jira_get_issue"));
+  });
+  it("jira MCP prompt, REST fallback and standup prompt share the same JQL", async () => {
+    const { standupPrompt } = await import("./local.js");
+    const jql = jiraWindowJql(WIN);
+    const mcp = jiraMcpPrompt(WIN, { baseUrl: "https://example.atlassian.net" });
+    assert.ok(mcp.includes(jql), "MCP prompt must embed jiraWindowJql");
+    const calls = [];
+    const fetch = async (url) => {
+      calls.push(url);
+      return { ok: true, status: 200, json: async () => ({ issues: [], isLast: true }) };
+    };
+    const s = patch(withDefaults({}), { trackers: { issues: ["linear", "jira"], jira: { baseUrl: "https://example.atlassian.net", enabled: true } } });
+    await jiraTracker.listIssues({ fetch, getEnv: getEnvFull }, s, WIN);
+    assert.ok(decodeURIComponent(calls[0]).includes(jql), "REST must use jiraWindowJql");
+    const prompt = standupPrompt(WIN, { commits: [], prs: [], issues: [], tasks: [], slack: [] });
+    assert.ok(prompt.includes(jql), "standup prompt must embed the same JQL");
   });
   it("bitbucket MCP prompt names workspace, state filter, pagination, read-only", () => {
     const p = bitbucketMcpPrompt(WIN, { workspace: "acme" });

@@ -39,7 +39,9 @@ export default class Start extends View {
     this.where = "worktree";
     this.mode = "plan";
     this.agent = "claude";
-    this.move = i.stateType !== "started";
+    // Move-to-started is a Linear action: Jira (and other providers') issues keep their origin.
+    this.canMove = (i.source ?? "linear") === "linear";
+    this.move = this.canMove && i.stateType !== "started";
     this.repos = [];
     this.repo = null;
     this.agents = [{ key: "claude", name: "Claude Code", run: ["claude"] }, { key: "shell", name: "Shell", run: null }];
@@ -192,7 +194,7 @@ export default class Start extends View {
       .when(this.agent === "claude", (el) => el.child(label("START IN")).child(seg("mode", MODES, this.mode, (v) => { this.mode = v; })))
       .when(this.agent !== "shell", (el) => el.child(label("FIRST MESSAGE"))
         .child(Textarea.new(this.message).h(150).px(10).py(8).rounded(8).border_1().border_color(t.input).bg(t.background).text_size(12.5)))
-      .when(i.stateType !== "started", (el) => el.child(div().pt(14).child(check("move", this.move, `Move ${i.identifier} to In Progress`, () => { this.move = !this.move; }))))
+      .when(this.canMove && i.stateType !== "started", (el) => el.child(div().pt(14).child(check("move", this.move, `Move ${i.identifier} to In Progress`, () => { this.move = !this.move; }))))
       .child(h_flex().pt(18).gap(8).items_center()
         .child(div().flex_1().text_size(11.5).text_color(t.dim).child(`Opens a tab named “${i.identifier} ${shortTitle(i.title)}”`))
         .child(button("cs-cancel", "Cancel", false, () => closeOverlay(props().overlay)))
