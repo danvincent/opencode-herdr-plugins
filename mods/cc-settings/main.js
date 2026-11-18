@@ -28,7 +28,7 @@ export function dailyCost(s) {
 export default class Settings extends View {
   init(_props, cx) {
     const s = shared("cc.settings");
-    this.draft = s ? clone({ repoRoots: s.repoRoots, github: s.github, linear: s.linear, slack: s.slack, standup: s.standup, usage: s.usage }) : null;
+    this.draft = s ? clone({ repoRoots: s.repoRoots, github: s.github, linear: s.linear, slack: s.slack, standup: s.standup, usage: s.usage, ai: { provider: s?.ai?.provider === "opencode" ? "opencode" : "claude" } }) : null;
     this.roots = InputState.new({ value: (s?.repoRoots ?? []).map(tilde).join(", "), placeholder: "Leave empty: the folders of the repos open in Herdr" });
     this.handle = cx.focus_handle();
   }
@@ -109,6 +109,9 @@ export default class Settings extends View {
         .child(card("use", "Usage bars", "Plan limits at the foot of the sidebar. Claude's come from your Claude Code login in the Keychain.", undefined, null, [
           row("Claude Code", toggle("use-claude", d.usage.claude, () => { d.usage.claude = !d.usage.claude; })),
           row("Codex", toggle("use-codex", d.usage.codex, () => { d.usage.codex = !d.usage.codex; })),
+        ]))
+        .child(card("ai", "Shell AI", "Which agent answers the headless runs above. Claude keeps the exact invocation; OpenCode runs `opencode run`.", undefined, null, [
+          row("Provider", seg("ai-provider", [{ id: "claude", label: "Claude" }, { id: "opencode", label: "OpenCode" }], d.ai.provider, (v) => { d.ai.provider = v; })),
         ])))
       .child(h_flex().flex_none().px(20).py(12).gap(8).items_center().border_t(1).border_color(t.border)
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(tilde(shared("cc.settings")?.file ?? "")))

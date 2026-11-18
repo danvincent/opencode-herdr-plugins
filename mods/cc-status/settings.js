@@ -11,6 +11,7 @@ export const DEFAULTS = {
   slack: { enabled: false, everyMin: 60, hours: [9, 19], model: "sonnet" },
   standup: { enabled: false, times: [23], weekdaysOnly: true, cutover: 18, model: "sonnet" },
   usage: { claude: true, codex: true },
+  ai: { provider: "claude" }, // shell AI for headless runs: "claude" or "opencode"
   demo: false, // sample data and no fetching, for scripts/preview.mjs
 };
 

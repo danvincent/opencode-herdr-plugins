@@ -9,6 +9,7 @@ import { STANDUP_TIMEOUT, STANDUP_TOOLS, STANDUP_SCHEMA, ASK_SCHEMA, windowFor, 
 import * as fs from "fs/promises";
 import { USAGE_EVERY, claudeUsage, codexUsage, backoff } from "./usage.js";
 import { withDefaults, patch, loadSettings, saveSettings, inHours } from "./settings.js";
+import { normalizeResult, resolveProvider, runShellAi, isSuccess, shouldCheckAuth } from "./shell-ai.js";
 
 // Claude Code lists connectors that need a sign-in here: a free way to know Linear or Slack isn't connected
 // before paying for a run that would find out. Not an official interface, so it's only a hint.
@@ -263,15 +264,14 @@ export default class CcStatus extends View {
       try {
         const local = await gatherLocal(win);
         const r = await this.claude(standupPrompt(win, local), STANDUP_TOOLS, ["--json-schema", STANDUP_SCHEMA], STANDUP_TIMEOUT, this.settings.standup.model, "1");
-        const out = JSON.parse(r.stdout || "{}");
-        const s = out.structured_output;
-        if (!s?.text) throw new Error(String(out.result || s?.error || r.stderr || `claude exited ${r.code}`).split("\n")[0]);
+        const s = r.structured;
+        if (!s?.text) throw new Error(String(r.text || s?.error || r.stderr || `${r.provider} exited ${r.code}`).split("\n")[0]);
         await this.changeStandup((st) => {
           // A rewrite of the same day can be undone; a new day starts fresh.
           if (st.key === win.key) remember(st); else st.history = [];
           Object.assign(st, { key: win.key, label: win.label, date: win.date, bullets: toBullets(s.text), edited: false,
             note: s.error || null, at: Date.now(), slot: slot?.id ?? st.slot ?? null,
-            sources: { commits: local.commits.length, prs: local.prs.length, tasks: local.tasks.length, asks: local.slack.length }, cost: out.total_cost_usd });
+            sources: { commits: local.commits.length, prs: local.prs.length, tasks: local.tasks.length, asks: local.slack.length }, cost: r.cost });
         }, { running: false, error: null });
       } catch (e) {
         // A failed scheduled run still uses up its slot; Write now retries.
@@ -293,9 +293,8 @@ export default class CcStatus extends View {
     cx.spawn(async (cx) => {
       try {
         const r = await this.claude(askPrompt(this.su, a.instruction, a.id), ["ToolSearch"], ["--json-schema", ASK_SCHEMA], 180_000, this.settings.standup.model, "0.3");
-        const out = JSON.parse(r.stdout || "{}");
-        const bullets = out.structured_output?.bullets;
-        if (!Array.isArray(bullets)) throw new Error(String(out.result || r.stderr || `claude exited ${r.code}`).split("\n")[0]);
+        const bullets = r.structured?.bullets;
+        if (!Array.isArray(bullets)) throw new Error(String(r.text || r.stderr || `${r.provider} exited ${r.code}`).split("\n")[0]);
         await this.changeStandup((st) => applyAsk(st, a.id, bullets), { asking: false });
       } catch (e) {
         this.publishStandup({ asking: false, askError: String(e?.message ?? e).slice(0, 160) });
@@ -306,12 +305,11 @@ export default class CcStatus extends View {
     });
   }
 
+  // One headless shell-AI run, dispatched by settings' AI provider (Claude by default).
+  // Returns the provider-neutral normalized result { provider, code, stdout, stderr,
+  // text, structured, cost, isError }; the Claude path keeps the exact historical invocation.
   claude(prompt, tools, extra, timeout, model = "haiku", budget = "0.5") {
-    const dir = `${appHome()}/data/cc-claude`;
-    return exec("mkdir", ["-p", dir]).then(() => exec(`${home()}/.local/bin/claude`, [
-      "-p", prompt, "--model", model, "--tools", "ToolSearch", "--allowedTools", tools.join(","),
-      "--output-format", "json", "--no-session-persistence", "--max-budget-usd", budget, ...extra,
-    ], { cwd: dir, timeout }));
+    return runShellAi({ exec, home, appHome }, this.settings, { prompt, tools, extra, timeout, model, budget });
   }
 
   // Reads, changes and writes the Slack state one at a time, so a tick never races a sweep.
@@ -340,7 +338,7 @@ export default class CcStatus extends View {
     this.slackStarted = Date.now();
     cx.spawn(async (cx) => {
       const started = Date.now();
-      if (!forced && await needsAuth("Slack")) {
+      if (shouldCheckAuth(this.settings, forced) && await needsAuth("Slack")) {
         await this.slackChange(() => ({ running: false, notConnected: true, error: null, failedAt: started }));
         this.slackBusy = false;
         return;
@@ -349,9 +347,8 @@ export default class CcStatus extends View {
       try {
         const state = await loadState(this.slackPath);
         const r = await this.claude(slackPrompt(state, started), SLACK_TOOLS, ["--json-schema", SLACK_SCHEMA], SLACK_TIMEOUT, this.settings.slack.model, "1");
-        const out = JSON.parse(r.stdout || "{}");
-        const s = out.structured_output;
-        if (!s) throw new Error(String(out.result || r.stderr || `claude exited ${r.code}`).split("\n")[0]);
+        const s = r.structured;
+        if (!s) throw new Error(String(r.text || r.stderr || `${r.provider} exited ${r.code}`).split("\n")[0]);
         if (s.connected === false) {
           await this.slackChange(() => ({ running: false, notConnected: true, error: null, failedAt: started }));
           return;
@@ -360,7 +357,7 @@ export default class CcStatus extends View {
         let fresh = [];
         await this.slackChange((st) => {
           fresh = merge(st, s, started);
-          st.runs = [...st.runs, { at: started, ok: true, cost: out.total_cost_usd, items: s.items.length }].slice(-50);
+          st.runs = [...st.runs, { at: started, ok: true, cost: r.cost, items: s.items.length }].slice(-50);
           return { running: false, error: null, failedAt: null, notConnected: false };
         });
         for (const it of fresh.slice(0, 3)) notify({ title: `${it.from} in ${it.channel}`, body: it.text, level: "warning", timeout: 15_000 });
@@ -381,7 +378,7 @@ export default class CcStatus extends View {
     this.linearStarted = Date.now();
     cx.spawn(async (cx) => {
       const prev = shared("cc.linear") ?? {};
-      if (!forced && await needsAuth("Linear")) {
+      if (shouldCheckAuth(this.settings, forced) && await needsAuth("Linear")) {
         setShared("cc.linear", { ...prev, running: false, notConnected: true, error: null, failedAt: Date.now() });
         this.linearBusy = false;
         return;
@@ -389,9 +386,8 @@ export default class CcStatus extends View {
       setShared("cc.linear", { ...prev, running: true });
       try {
         const r = await this.claude(LINEAR_PROMPT, LINEAR_READ, ["--json-schema", LINEAR_SCHEMA], LINEAR_TIMEOUT, this.settings.linear.model);
-        const out = JSON.parse(r.stdout || "{}");
-        const s = out.structured_output;
-        if (!s) throw new Error(String(out.result || r.stderr || `claude exited ${r.code}`).split("\n")[0]);
+        const s = r.structured;
+        if (!s) throw new Error(String(r.text || r.stderr || `${r.provider} exited ${r.code}`).split("\n")[0]);
         if (s.connected === false) setShared("cc.linear", { ...prev, running: false, notConnected: true, error: null, failedAt: Date.now() });
         else if (s.error) setShared("cc.linear", { ...prev, running: false, notConnected: false, error: s.error, failedAt: Date.now() });
         else setShared("cc.linear", { issues: s.issues, at: Date.now(), running: false, notConnected: false, error: null });
@@ -408,9 +404,8 @@ export default class CcStatus extends View {
   moveToStarted(cx, identifier) {
     cx.spawn(async (cx) => {
       const prompt = `Move Linear issue ${identifier} to its team's "In Progress" state (or the team's first state of type started). Change nothing else: no comments, no other fields. Reply with one short sentence.`;
-      const r = await this.claude(prompt, LINEAR_WRITE, [], 180_000).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
-      let ok = r.code === 0, text = "";
-      try { const o = JSON.parse(r.stdout); ok = ok && !o.is_error; text = o.result ?? ""; } catch { ok = false; }
+      const r = await this.claude(prompt, LINEAR_WRITE, [], 180_000).catch((e) => normalizeResult(resolveProvider(this.settings), { code: 1, stdout: "", stderr: String(e) }));
+      const ok = isSuccess(r), text = r.text ?? "";
       notify({ title: ok ? `${identifier} moved to In Progress` : `Couldn't move ${identifier}`, body: ok ? undefined : (text || r.stderr || "").slice(0, 160), level: ok ? "success" : "warning" });
       this.linear(cx);
     });
